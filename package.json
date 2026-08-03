@@ -1,0 +1,15 @@
+{
+  "name": "constant-contact-harness",
+  "version": "1.0.0",
+  "description": "Constant Contact V3 API test harness for contact pipeline foundation",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test-flow": "node test-flow.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  }
+}
