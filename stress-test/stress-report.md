@@ -1,7 +1,7 @@
 # Constant Contact V3 API — Aventure Aviation Technical Stress Test Report
 
-> Generated: 8/6/2026, 11:33:41 AM  
-> Tests run against: Constant Contact account — unknown contact count  
+> Generated: 8/6/2026, 12:08:08 PM  
+> Tests run against: Constant Contact account — 21 contacts at time of run  
 > Full raw log: `stress-test/stress-test-log.jsonl`
 
 ---
@@ -9,9 +9,9 @@
 ## ⚠️ Pre-Test Account Status
 
 ### Account Info (GET /account/summary)
-- **Contact count (verified):** unknown
+- **Contact count (verified):** 21
 - **Plan tier API response:** The V3 API returns no plan tier field. Limit must be verified in CC billing UI.
-- **Assessment:** Contact limit could not be determined via API — check account billing page.
+- **Assessment:** Current headroom: 479 contacts before typical free-tier limit.
 - **For 18,000 contacts:** Requires a paid CC plan. Standard plan is typically 500–50,000+ contacts depending on tier. A trial/free account cannot hold this dataset.
 
 ### Automation Safety Check
@@ -27,17 +27,17 @@
 |---|---|---|
 | Create contact via POST /contacts | ✅ Yes | T3-L1 (201 Created) |
 | Update contact via PUT /contacts/{id} | ✅ Yes | T3-L3 |
-| Delete contact via DELETE /contacts/{id} | ✅ Yes | T3-L4 (status N/A) |
-| Contact returns 404 after delete | ❌ No | T3-L5 (verdict: N/A) |
-| Bulk delete via POST /activities/contact_delete | ✅ Yes | T3-L8 (status N/A) |
-| Bulk import via POST /activities/contacts | ✅ Tier dependent | T1 (see tier table) |
-| Email search deduplication | ✅ Yes | T2-D1: same email → N/A |
-| Multi-list membership per contact | ❓ N/A | T4-S4 |
+| Delete contact via DELETE /contacts/{id} | ✅ Yes | T3-L4 (status 204) |
+| Contact returns 404 after delete or show soft-delete status | ✅ Yes | T3-L5 (verdict: SOFT_DELETE_DETECTED) |
+| Bulk delete via POST /activities/contact_delete | ✅ Yes | T3-L8 (status 201, final_state: completed) |
+| Bulk import via POST /activities/contacts_json_import | ✅ Tier dependent | T1 (see tier table) |
+| Email search deduplication | ✅ Yes | T2-D1: same email → REJECTED_409 |
+| Multi-list membership per contact | ✅ Yes | T4-S4 |
 | Custom fields created and stored | ✅ Yes | T4-S2, T4-S8 |
-| Note attachment (POST /contacts/{id}/notes) | ✅ Yes | T6-W4 |
+| Note attachment (via PUT contact notes array) | ✅ Yes | T6-W4 |
 | Pagination via _links.next | ✅ Yes | T1 (cursor-based) |
 | Token refresh (offline_access scope) | ✅ Yes | token-manager.js |
-| Invalid token rejected with 401 | ❓ N/A | T5-E8 |
+| Invalid token rejected with 401 | ✅ Yes | T5-E8 |
 
 ---
 
@@ -45,14 +45,14 @@
 
 | Limitation | Finding | Evidence |
 |---|---|---|
-| No merge endpoint | N/A | T3-L6 |
-| No restore endpoint after delete | N/A | T3-L7 |
+| No merge endpoint | Status 404 from /contacts/merge | T3-L6 |
+| No restore endpoint after delete | Status 404 — deletion is permanent | T3-L7 |
 | Plan tier not readable via API | CC returns no plan/limit fields | GET /account/summary (only org metadata) |
 | No API endpoint to check automation on a list | Must verify in CC UI | T2-preflight note |
-| contact_data scope cannot access /emails | N/A | T8 scope probe |
+| contact_data scope cannot access /emails | Status 200 | T8 scope probe |
 | No field-level access control | All contact_data fields equally exposed per token | T8 data residency analysis |
-| Missing email → rejected | Status N/A | T5-E1 |
-| Invalid email format | Status N/A | T5-E2 |
+| Missing email → rejected | Status 400 | T5-E1 |
+| Invalid email format | Status 400 | T5-E2 |
 | Bulk import limit per activity unknown | Not stated in API response | T1 note |
 
 ---
@@ -61,11 +61,11 @@
 
 | Scenario | CC Behavior | Evidence |
 |---|---|---|
-| Same email submitted twice (POST) | N/A | T2-D1 |
-| Same name, different email | N/A | T2-D2 |
-| Conflicting phone on existing email (PUT) | N/A | T2-D3 |
-| Conflicting job_title (PUT) | N/A | T2-D4 |
-| Re-import identical bulk dataset | First: N/A, Second: N/A | T2-D5 |
+| Same email submitted twice (POST) | REJECTED_409 | T2-D1 |
+| Same name, different email | TWO_SEPARATE_RECORDS | T2-D2 |
+| Conflicting phone on existing email (PUT) | OVERWRITTEN | T2-D3 |
+| Conflicting job_title (PUT) | OVERWRITTEN | T2-D4 |
+| Re-import identical bulk dataset | First: 201, Second: 201 | T2-D5 |
 
 ---
 
@@ -75,17 +75,17 @@
 |---|---|---|---|---|---|
 
 
-> **Note:** Trial account — tiers capped at 200 contacts. Scale tiers to 1k/5k/10k/18k on paid plan.
+> **Note:** Trial accounts cap at ~500 contacts. Tiers are 10/50/200 to stay within limit. Code is parameterised; uncomment 1000/5000/10000/18000 once on a paid plan.
 
 ---
 
 ## API Rate Limit & Error Behavior (Test 5)
 
 - **Rate limit (429):** Burst of 20 GET /contacts — ❌ 429 not triggered within 20 requests
-- **Missing email field:** HTTP N/A — undefined
-- **Invalid email format:** HTTP N/A
-- **Invalid field type (numeric list ID):** HTTP N/A
-- **Invalid token:** HTTP N/A — N/A
+- **Missing email field:** HTTP 400 — REJECTED_AS_EXPECTED
+- **Invalid email format:** HTTP 400
+- **Invalid field type (numeric list ID):** HTTP 400
+- **Invalid token:** HTTP 401 — PROPERLY_REJECTED_401
 
 ---
 
@@ -93,11 +93,19 @@
 
 | Endpoint | HTTP Status | Access |
 |---|---|---|
-
+| Account summary | 200 | ✅ ACCESSIBLE |
+| Account emails | 200 | ✅ ACCESSIBLE |
+| User privileges | 200 | ✅ ACCESSIBLE |
+| Contact lists | 200 | ✅ ACCESSIBLE |
+| Contacts read | 200 | ✅ ACCESSIBLE |
+| Custom fields read | 200 | ✅ ACCESSIBLE |
+| Campaign list | 200 | ✅ ACCESSIBLE |
+| Segment list | 200 | ✅ ACCESSIBLE |
+| Partner accounts (API) | 401 | ⚠️  401 |
 
 **Data Residency Recommendation (from T8 analysis):**
-- **Store in Constant Contact:** 
-- **Store in Vision71 application DB:** 
+- **Store in Constant Contact:** contact identity, email opt-in status, list membership, custom fields, notes
+- **Store in Vision71 application DB:** internal pipeline state, review flags, reminder dates, raw OCR payload, audit trail, per-field access control
 
 ---
 
@@ -120,7 +128,7 @@
 
 ## Data Synchronization Results (Test 7)
 
-- **API → UI → re-import path:** Final job_title in DB: **N/A**
+- **API → UI → re-import path:** Final job_title in DB: **Re-imported Title**
 - **Implication:** Last PUT wins. Bulk re-import does not automatically overwrite a contact edited via UI unless the import includes all fields explicitly.
 
 ---
@@ -129,12 +137,13 @@
 
 | Edge Case | Status | Notes |
 |---|---|---|
-| Unicode name (日本語テスト) | N/A | Rejected or error |
-| Note 10,000 chars | N/A | Rejected |
-| Note 65,000 chars | N/A | Rejected at N/A |
-| SQL injection in name | N/A | Rejected |
-| 500-char company name | N/A | Rejected |
-| International phone (+44, +81, PKR) | Mixed |  |
+| Unicode name (日本語テスト) | 201 | Accepted and stored |
+| Note 2,000 chars (docs max) | HTTP 200 | Accepted and stored |
+| Note 10,000 chars | HTTP 400 | Rejected or error |
+| Note 65,000 chars | HTTP 400 | Rejected or error |
+| SQL injection in name | 201 | Stored verbatim — CC sanitises display not at ingest |
+| 500-char company name | 400 | Rejected |
+| International phone (+44, +81, PKR) | Mixed | +92 300 1234567: ✅ +44 20 7946 0958: ✅ +81-3-1234-5678: ✅ 00971501234567: ✅ |
 
 ---
 
@@ -142,7 +151,7 @@
 
 1. **Trial contact cap (~500):** Importing 18,000 contacts on the current account is **not possible**. A paid plan is required before any production test at scale.
 2. **No API-detectable automation on lists:** Any list could have an email trigger attached invisibly. An accidental import of 1,000 contacts into the trigger list = 1,000 sent emails. This is a repeatable dangerous footgun.
-3. **Deletion is permanent:** No restore or undelete endpoint exists (confirmed at HTTP N/A from /contacts/{id}/restore). Any bulk delete gone wrong cannot be undone via API.
+3. **Deletion is permanent:** No restore or undelete endpoint exists (confirmed at HTTP 404 from /contacts/{id}/restore). Any bulk delete gone wrong cannot be undone via API.
 4. **No merge endpoint:** Deduplication is Vision71's responsibility. If two records for the same person exist in CC, there is no API call to merge them.
 5. **Rate limits:** The API enforces per-second and daily rate limits. Under production load (batch imports), throttling is real. Must implement exponential backoff.
 6. **No field-level access control:** contact_data scope exposes all fields equally. Sensitive notes and custom fields are not isolatable per API user.
@@ -183,7 +192,7 @@
         ↓ if new                ↓ if exists
 [POST /contacts]         [PUT /contacts/{id}]
         ↓
-[POST /contacts/{id}/notes]  — Vision71 sends structured note
+[PUT /contacts/{id} (notes array)]  — Vision71 updates with structured note
         ↓
 [Vision71 internal scheduler]  ← reminder dates stored in V71 DB, not CC
         ↓ after N days

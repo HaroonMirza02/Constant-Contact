@@ -65,13 +65,22 @@ async function runT6(stressListId, customFieldId) {
     if (!contactId) { logError(SEC, 'W3_FAILED', {}); return; }
 
     // Step 4: Attach a note (stored in CC, Vision71 provides content)
-    console.log('[W4] Attaching note...');
-    const noteR = await api.post(SEC, `/contacts/${contactId}/notes`, {
-        content: `Card scanned at Aventure Aviation Trade Show. Reviewed by pipeline at ${new Date().toISOString()}. Reminder: follow up in 7 days.`
+    console.log('[W4] Attaching note by PUT-ing contact update with notes array...');
+    const noteR = await api.put(SEC, `/contacts/${contactId}`, {
+        update_source: 'Account',
+        email_address: { address: card.email, permission_to_send: 'implicit' },
+        first_name: card.first_name,
+        last_name: card.last_name,
+        company_name: card.company_name,
+        job_title: card.job_title,
+        list_memberships: [stressListId],
+        notes: [{
+            content: `Card scanned at Aventure Aviation Trade Show. Reviewed by pipeline at ${new Date().toISOString()}. Reminder: follow up in 7 days.`
+        }]
     });
     logNotice(SEC, 'W4_NOTE', {
         status: noteR.status, body: noteR.body,
-        boundary: 'CC stores notes; Vision71 triggers note creation via API'
+        boundary: 'CC stores notes; Vision71 triggers note creation via PUT contact endpoint'
     });
     console.log(`  → note status: ${noteR.status}`);
 
@@ -88,7 +97,7 @@ async function runT6(stressListId, customFieldId) {
             'Contact record storage (email, name, phone, company, job_title)',
             'Custom field values',
             'List memberships',
-            'Notes (via /contacts/{id}/notes)',
+            'Notes (via notes array in PUT/POST contacts)',
             'Bulk import and deduplication by email',
             'Unsubscribe management'
         ],
@@ -153,11 +162,18 @@ async function runT7(stressListId) {
     // Path C: Re-import same email via bulk with DIFFERENT job_title
     const bulkPayload = {
         import_data: [{ email: c.email, first_name: c.first_name, last_name: c.last_name, job_title: 'Re-imported Title' }],
-        lists: [stressListId]
+        list_ids: [stressListId]
     };
-    const bulkR = await api.post(SEC, '/activities/contacts', bulkPayload);
-    logNotice(SEC, 'SYNC_REIMPORT', { status: bulkR.status, activity_id: bulkR.ok ? bulkR.body.activity_id : null });
-    console.log(`  Re-import bulk status: ${bulkR.status}`);
+    const bulkR = await api.post(SEC, '/activities/contacts_json_import', bulkPayload);
+    let syncBulkFinalState = 'UNKNOWN';
+    if (bulkR.ok && bulkR.body.activity_id) {
+        const { pollActivity } = require('./t1-large-dataset');
+        console.log(`  Polling sync bulk re-import activity ${bulkR.body.activity_id}...`);
+        const pollS = await pollActivity(bulkR.body.activity_id);
+        syncBulkFinalState = pollS.body ? pollS.body.state : 'UNKNOWN';
+    }
+    logNotice(SEC, 'SYNC_REIMPORT', { status: bulkR.status, activity_id: bulkR.ok ? bulkR.body.activity_id : null, final_state: syncBulkFinalState });
+    console.log(`  Re-import bulk status: ${bulkR.status}, final_state: ${syncBulkFinalState}`);
 
     // Final state check
     const finalR = await api.get(SEC, `/contacts/${id}`);
@@ -222,26 +238,45 @@ async function runT9(stressListId) {
     logNotice(SEC, 'EDGE_UNICODE', { status: u1.status, body: u1.ok ? { id: u1.body.contact_id } : u1.body });
     console.log(`  → ${u1.status}`);
 
-    // E2: Extremely long note
-    console.log('[Edge-2] Extremely long note (10k chars)...');
-    const longNote = 'A'.repeat(10000);
-    const noteContact = await api.post(SEC, '/contacts', {
-        create_source: 'Account',
-        email_address: { address: `longnote.${ts}@stress.test`, permission_to_send: 'implicit' },
-        first_name: 'LongNote', last_name: 'Test',
-        list_memberships: [stressListId]
-    });
-    if (noteContact.ok) {
-        const nr = await api.post(SEC, `/contacts/${noteContact.body.contact_id}/notes`, { content: longNote });
-        logNotice(SEC, 'EDGE_LONG_NOTE', { status: nr.status, note_length: longNote.length, body: nr.ok ? 'stored' : nr.body });
-        console.log(`  → Note (10k chars) status: ${nr.status}`);
+    // E2: Note length tests using PUT
+    console.log('[Edge-2] Note length limit tests using PUT...');
 
-        // Try 65k chars
-        const veryLongNote = 'B'.repeat(65000);
-        const nr2 = await api.post(SEC, `/contacts/${noteContact.body.contact_id}/notes`, { content: veryLongNote });
-        logNotice(SEC, 'EDGE_VERY_LONG_NOTE', { status: nr2.status, note_length: veryLongNote.length, body: nr2.ok ? 'stored' : nr2.body });
-        console.log(`  → Note (65k chars) status: ${nr2.status}`);
-    }
+    const runNoteTest = async (label, length) => {
+        const noteText = 'C'.repeat(length);
+        const contactObj = generateContact();
+        const cr = await api.post(SEC, '/contacts', {
+            create_source: 'Account',
+            email_address: { address: contactObj.email, permission_to_send: 'implicit' },
+            first_name: contactObj.first_name,
+            last_name: contactObj.last_name,
+            list_memberships: [stressListId]
+        });
+
+        if (cr.ok && cr.body.contact_id) {
+            const cid = cr.body.contact_id;
+            const putRes = await api.put(SEC, `/contacts/${cid}`, {
+                update_source: 'Account',
+                email_address: { address: contactObj.email, permission_to_send: 'implicit' },
+                first_name: contactObj.first_name,
+                last_name: contactObj.last_name,
+                list_memberships: [stressListId],
+                notes: [{ content: noteText }]
+            });
+            console.log(`  → Note length ${length} (${label}) PUT status: ${putRes.status}`);
+            return { label, length, status: putRes.status, accepted: putRes.ok };
+        }
+        return { label, length, status: 0, accepted: false, error: 'create_failed' };
+    };
+
+    const r2000 = await runNoteTest('2,000 documented max', 2000);
+    const r10000 = await runNoteTest('10,000 chars', 10000);
+    const r65000 = await runNoteTest('65,000 chars', 65000);
+
+    logNotice(SEC, 'EDGE_NOTE_LIMIT_TESTS', {
+        note_2000: r2000,
+        note_10000: r10000,
+        note_65000: r65000
+    });
 
     // E3: International phone formats
     console.log('[Edge-3] International phone formats...');

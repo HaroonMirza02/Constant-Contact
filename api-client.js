@@ -75,8 +75,10 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(
     async (config) => {
         try {
-            const token = await tokenManager.getValidAccessToken();
-            config.headers['Authorization'] = `Bearer ${token}`;
+            if (!config.headers['Authorization']) {
+                const token = await tokenManager.getValidAccessToken();
+                config.headers['Authorization'] = `Bearer ${token}`;
+            }
             config.headers['Content-Type'] = 'application/json';
 
             logRequest(config);

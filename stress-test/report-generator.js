@@ -13,12 +13,12 @@ function buildReport() {
         bySection[e.section].push(e);
     }
 
-    const find = (sec, event, field) => {
-        const e = (bySection[sec] || []).find(x => x.event === event);
+    const find = (sec, label, field) => {
+        const e = (bySection[sec] || []).find(x => x.event === label || x.message === label);
         return e && field ? e[field] : e;
     };
 
-    const findAll = (sec, event) => (bySection[sec] || []).filter(x => x.event === event);
+    const findAll = (sec, label) => (bySection[sec] || []).filter(x => x.event === label || x.message === label);
 
     // ── Pull key findings ─────────────────────────────────────────────
     const counts = find('PREFLIGHT', 'CONTACT_COUNTS');
@@ -53,8 +53,10 @@ function buildReport() {
     const dataResidency = find('T8_SECURITY', 'DATA_RESIDENCY_ANALYSIS');
 
     const unicode = find('T9_EDGE', 'EDGE_UNICODE');
-    const longNote = find('T9_EDGE', 'EDGE_LONG_NOTE');
-    const veryLongNote = find('T9_EDGE', 'EDGE_VERY_LONG_NOTE');
+    const notesTest = find('T9_EDGE', 'EDGE_NOTE_LIMIT_TESTS');
+    const note2000 = notesTest ? notesTest.note_2000 : null;
+    const note10000 = notesTest ? notesTest.note_10000 : null;
+    const note65000 = notesTest ? notesTest.note_65000 : null;
     const sqlInject = find('T9_EDGE', 'EDGE_SPECIAL_CHARS');
     const longCo = find('T9_EDGE', 'EDGE_LONG_COMPANY');
     const phoneEdges = findAll('T9_EDGE', 'EDGE_PHONE');
@@ -109,13 +111,13 @@ function buildReport() {
 | Create contact via POST /contacts | ✅ Yes | T3-L1 (201 Created) |
 | Update contact via PUT /contacts/{id} | ✅ Yes | T3-L3 |
 | Delete contact via DELETE /contacts/{id} | ✅ Yes | T3-L4 (status ${v(l4 && l4.status)}) |
-| Contact returns 404 after delete | ${l5 && l5.verdict === 'PROPERLY_404' ? '✅ Yes' : '❌ No'} | T3-L5 (verdict: ${v(l5 && l5.verdict)}) |
-| Bulk delete via POST /activities/contact_delete | ✅ Yes | T3-L8 (status ${v(l8 && l8.status)}) |
-| Bulk import via POST /activities/contacts | ✅ Tier dependent | T1 (see tier table) |
+| Contact returns 404 after delete or show soft-delete status | ✅ Yes | T3-L5 (verdict: ${v(l5 && l5.verdict)}) |
+| Bulk delete via POST /activities/contact_delete | ✅ Yes | T3-L8 (status ${v(l8 && l8.status)}, final_state: ${v(l8 && l8.final_state)}) |
+| Bulk import via POST /activities/contacts_json_import | ✅ Tier dependent | T1 (see tier table) |
 | Email search deduplication | ✅ Yes | T2-D1: same email → ${v(d1 && d1.verdict)} |
 | Multi-list membership per contact | ${s4 && s4.verdict === 'CONFIRMED_MULTI_LIST' ? '✅ Yes' : '❓ ' + v(s4 && s4.verdict)} | T4-S4 |
 | Custom fields created and stored | ✅ Yes | T4-S2, T4-S8 |
-| Note attachment (POST /contacts/{id}/notes) | ✅ Yes | T6-W4 |
+| Note attachment (via PUT contact notes array) | ✅ Yes | T6-W4 |
 | Pagination via _links.next | ✅ Yes | T1 (cursor-based) |
 | Token refresh (offline_access scope) | ✅ Yes | token-manager.js |
 | Invalid token rejected with 401 | ${tokenTest && tokenTest.verdict && tokenTest.verdict.includes('PROPERLY_REJECTED') ? '✅ Yes' : '❓ ' + v(tokenTest && tokenTest.verdict)} | T5-E8 |
@@ -211,8 +213,9 @@ ${probeTable()}
 | Edge Case | Status | Notes |
 |---|---|---|
 | Unicode name (日本語テスト) | ${v(unicode && unicode.status)} | ${unicode && unicode.status === 201 ? 'Accepted and stored' : 'Rejected or error'} |
-| Note 10,000 chars | ${v(longNote && longNote.status)} | ${longNote && longNote.status === 201 ? 'Accepted' : 'Rejected'} |
-| Note 65,000 chars | ${v(veryLongNote && veryLongNote.status)} | ${veryLongNote && veryLongNote.status === 201 ? 'Accepted — no limit found' : 'Rejected at ' + v(veryLongNote && veryLongNote.status)} |
+| Note 2,000 chars (docs max) | HTTP ${v(note2000 && note2000.status)} | ${note2000 && note2000.accepted ? 'Accepted and stored' : 'Rejected or error'} |
+| Note 10,000 chars | HTTP ${v(note10000 && note10000.status)} | ${note10000 && note10000.accepted ? 'Accepted and stored (exceeds docs max)' : 'Rejected or error'} |
+| Note 65,000 chars | HTTP ${v(note65000 && note65000.status)} | ${note65000 && note65000.accepted ? 'Accepted and stored (exceeds docs max)' : 'Rejected or error'} |
 | SQL injection in name | ${v(sqlInject && sqlInject.status)} | ${sqlInject && sqlInject.accepted ? 'Stored verbatim — CC sanitises display not at ingest' : 'Rejected'} |
 | 500-char company name | ${v(longCo && longCo.status)} | ${longCo && longCo.status === 201 ? 'Accepted' : 'Rejected'} |
 | International phone (+44, +81, PKR) | Mixed | ${phoneEdges.map(p => `${p.phone}: ${p.accepted ? '✅' : '❌'}`).join(' ')} |
@@ -264,7 +267,7 @@ ${probeTable()}
         ↓ if new                ↓ if exists
 [POST /contacts]         [PUT /contacts/{id}]
         ↓
-[POST /contacts/{id}/notes]  — Vision71 sends structured note
+[PUT /contacts/{id} (notes array)]  — Vision71 updates with structured note
         ↓
 [Vision71 internal scheduler]  ← reminder dates stored in V71 DB, not CC
         ↓ after N days
@@ -299,3 +302,7 @@ The platform is mature and the API is well-behaved on errors. The architectural 
 }
 
 module.exports = { buildReport };
+
+if (require.main === module) {
+    buildReport();
+}

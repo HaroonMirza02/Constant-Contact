@@ -17,7 +17,7 @@ const { generateBatch } = require('./generators');
 const { logNotice, logError } = require('./logger');
 
 const SEC = 'T1_LARGE_DATASET';
-const BULK_ENDPOINT = '/activities/contacts';
+const BULK_ENDPOINT = '/activities/contacts_json_import';
 const BATCH_POLL_INTERVAL_MS = 2000;
 const BATCH_POLL_RETRIES = 15;
 
@@ -53,7 +53,7 @@ async function importTier(tierSize, listId, customFieldId) {
             job_title: c.job_title,
             phone: c.phone_numbers[0].phone_number
         })),
-        lists: [listId]
+        list_ids: [listId]
     };
 
     const importRes = await api.post(section, BULK_ENDPOINT, importBody);
@@ -172,4 +172,4 @@ async function run(stressListId, customFieldId) {
     return results;
 }
 
-module.exports = { run };
+module.exports = { run, pollActivity };

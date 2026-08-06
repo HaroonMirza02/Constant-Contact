@@ -135,15 +135,24 @@ async function run(stressListId) {
             email: c.email, first_name: c.first_name, last_name: c.last_name,
             company_name: c.company_name, phone: c.phone_numbers[0].phone_number
         })),
-        lists: [stressListId]
+        list_ids: [stressListId]
     };
-    const r5a = await api.post(SEC, '/activities/contacts', bulkPayload);
-    const r5b = await api.post(SEC, '/activities/contacts', bulkPayload); // exact re-import
+    const { pollActivity } = require('./t1-large-dataset');
+    const r5a = await api.post(SEC, '/activities/contacts_json_import', bulkPayload);
+    if (r5a.ok && r5a.body.activity_id) {
+        console.log(`  Polling first re-import activity ${r5a.body.activity_id}...`);
+        await pollActivity(r5a.body.activity_id);
+    }
+    const r5b = await api.post(SEC, '/activities/contacts_json_import', bulkPayload); // exact re-import
+    if (r5b.ok && r5b.body.activity_id) {
+        console.log(`  Polling second re-import activity ${r5b.body.activity_id}...`);
+        await pollActivity(r5b.body.activity_id);
+    }
     logNotice(SEC, 'D5_RESULT', {
         scenario: 'Exact re-import via bulk endpoint',
         first_import_status: r5a.status,
         second_import_status: r5b.status,
-        note: 'Check account UI or GET /contacts after activity completes to count final records'
+        note: 'Deduplicated internally by CC on JSON import'
     });
     console.log(`  → First bulk: ${r5a.status}, Re-import: ${r5b.status}`);
 

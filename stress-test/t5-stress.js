@@ -22,22 +22,17 @@ async function run(stressListId) {
     console.log('T5  A P I   S T R E S S   T E S T I N G');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
 
-    // ── R1 · Rapid burst to trigger rate limit ────────────────────────
-    console.log('[R1] Burst 20 rapid GET /contacts requests...');
-    const burstResults = [];
-    for (let i = 0; i < 20; i++) {
-        const r = await api.get(SEC, `/contacts?limit=5`);
-        burstResults.push({ seq: i, status: r.status, durationMs: r.durationMs });
-        if (r.status === 429) {
-            logError(SEC, 'RATE_LIMIT_HIT', { seq: i, body: r.body });
-            console.log(`  🔴 429 RATE LIMIT at request #${i}`);
-            // Capture retry-after header (logged by api.js)
-            break;
-        }
+    // ── R1 · Rapid burst to trigger rate limit (Concurrent) ───────────
+    console.log('[R1] Burst 40 concurrent GET /contacts requests...');
+    const promises = [];
+    for (let i = 0; i < 40; i++) {
+        promises.push(api.get(SEC, `/contacts?limit=1`).then(r => ({ seq: i, status: r.status, durationMs: r.durationMs })));
     }
-    const rlHit = burstResults.find(b => b.status === 429);
-    logNotice(SEC, 'R1_BURST_RESULT', { burst: burstResults, rate_limited: !!rlHit });
-    console.log(`  Rate limit hit: ${!!rlHit}`);
+    const burstResults = await Promise.all(promises);
+    const rlHits = burstResults.filter(b => b.status === 429);
+    const rlHit = rlHits.length > 0;
+    logNotice(SEC, 'R1_BURST_RESULT', { burst: burstResults, rate_limited: rlHit, rate_limit_hit_count: rlHits.length });
+    console.log(`  Rate limit hit: ${rlHit} (${rlHits.length} of 40 requests returned 429)`);
 
     // ── R2 · Retry after rate limit (backoff) ─────────────────────────
     if (rlHit) {
@@ -112,19 +107,9 @@ async function run(stressListId) {
     logNotice(SEC, 'E7_MISSING_SOURCE', { status: e7.status, body: e7.body });
     console.log(`  → status: ${e7.status}`);
 
-    // ── E8 · Token expiry simulation (swap in bad bearer then restore) ─
+    // ── E8 · Token expiry simulation ──────────────────────────────────
     console.log('[E8] Simulating expired token (sending garbage bearer)...');
-    const rawClient = require('../api-client');
-    const origInterceptor = rawClient.interceptors.request;
-
-    // Temporarily add a request interceptor with a bad token
-    const badTokenId = rawClient.interceptors.request.use(cfg => {
-        cfg.headers['Authorization'] = 'Bearer INVALID_TOKEN_STRESS_TEST';
-        return cfg;
-    });
-
-    const e8 = await api.get(SEC, '/contacts?limit=1');
-    rawClient.interceptors.request.eject(badTokenId);
+    const e8 = await api.get(SEC, '/contacts?limit=1', { 'Authorization': 'Bearer INVALID_TOKEN_STRESS_TEST' });
 
     logNotice(SEC, 'E8_INVALID_TOKEN', {
         status: e8.status, body: e8.body,

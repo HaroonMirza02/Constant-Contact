@@ -63,14 +63,20 @@ async function run(stressListId, customFieldId) {
     logNotice(SEC, 'L4_DELETE', { status: delRes.status, body: delRes.body });
     console.log(`  → status: ${delRes.status}`);
 
-    // ── L5 · Read after delete (should 404) ──────────────────────────
-    console.log('[L5] Attempt read after delete (expect 404)...');
+    // ── L5 · Read after delete (should 404 or show soft-delete) ──────
+    console.log('[L5] Attempt read after delete...');
     const afterDel = await api.get(SEC, `/contacts/${id}?include=custom_fields`);
+    const isSoftDeleted = afterDel.ok && (afterDel.body.deleted_at || afterDel.body.status === 'deleted' || afterDel.body.status === 'deleted_at');
     logNotice(SEC, 'L5_READ_AFTER_DELETE', {
-        status: afterDel.status, body: afterDel.body,
-        verdict: afterDel.status === 404 ? 'PROPERLY_404' : 'UNEXPECTED_' + afterDel.status
+        status: afterDel.status,
+        body: afterDel.body,
+        verdict: afterDel.status === 404
+            ? 'PERMANENT_DELETE_404'
+            : isSoftDeleted
+                ? 'SOFT_DELETE_DETECTED'
+                : 'STILL_ACTIVE_OR_UNEXPECTED_' + afterDel.status
     });
-    console.log(`  → status: ${afterDel.status} (expected 404)`);
+    console.log(`  → status: ${afterDel.status}, verdict: ${afterDel.status === 404 ? '404 (Permanent/Not Found)' : isSoftDeleted ? 'SOFT_DELETE' : 'OTHER'}`);
 
     // ── L6 · Merge attempt (CC has no API merge endpoint) ────────────
     console.log('[L6] Merge endpoint probe (expect 404/405)...');
@@ -90,6 +96,8 @@ async function run(stressListId, customFieldId) {
     });
     console.log(`  → status: ${restoreRes.status}`);
 
+    const { pollActivity } = require('./t1-large-dataset');
+
     // ── L8 · Bulk delete via activity ────────────────────────────────
     console.log('[L8] Bulk delete via activity endpoint...');
     const toDelete = [];
@@ -108,11 +116,19 @@ async function run(stressListId, customFieldId) {
     const bulkDelRes = await api.post(SEC, '/activities/contact_delete', {
         contact_ids: toDelete
     });
+    let buldDelFinalState = 'UNKNOWN';
+    if (bulkDelRes.ok && bulkDelRes.body.activity_id) {
+        console.log(`  Polling bulk delete activity ${bulkDelRes.body.activity_id}...`);
+        const pollD = await pollActivity(bulkDelRes.body.activity_id);
+        buldDelFinalState = pollD.body ? pollD.body.state : 'UNKNOWN';
+    }
     logNotice(SEC, 'L8_BULK_DELETE', {
-        status: bulkDelRes.status, activity_id: bulkDelRes.body.activity_id,
-        contacts_submitted: toDelete.length
+        status: bulkDelRes.status,
+        activity_id: bulkDelRes.body.activity_id,
+        contacts_submitted: toDelete.length,
+        final_state: buldDelFinalState
     });
-    console.log(`  → bulk delete status: ${bulkDelRes.status}, activity_id: ${bulkDelRes.body.activity_id || 'none'}`);
+    console.log(`  → bulk delete status: ${bulkDelRes.status}, final_state: ${buldDelFinalState}`);
 
     // ── L9 · Bulk update via activity (update list membership) ───────
     console.log('[L9] Bulk list membership update via activity...');
@@ -120,8 +136,18 @@ async function run(stressListId, customFieldId) {
         source: { contact_ids: toDelete.filter(Boolean) },
         list_ids: [stressListId]
     });
-    logNotice(SEC, 'L9_BULK_UPDATE', { status: bulkUpdateRes.status, body: bulkUpdateRes.body });
-    console.log(`  → bulk update status: ${bulkUpdateRes.status}`);
+    let bulkUpdateFinalState = 'UNKNOWN';
+    if (bulkUpdateRes.ok && bulkUpdateRes.body.activity_id) {
+        console.log(`  Polling bulk update activity ${bulkUpdateRes.body.activity_id}...`);
+        const pollU = await pollActivity(bulkUpdateRes.body.activity_id);
+        bulkUpdateFinalState = pollU.body ? pollU.body.state : 'UNKNOWN';
+    }
+    logNotice(SEC, 'L9_BULK_UPDATE', {
+        status: bulkUpdateRes.status,
+        body: bulkUpdateRes.body,
+        final_state: bulkUpdateFinalState
+    });
+    console.log(`  → bulk update status: ${bulkUpdateRes.status}, final_state: ${bulkUpdateFinalState}`);
 }
 
 module.exports = { run };

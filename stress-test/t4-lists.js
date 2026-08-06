@@ -99,8 +99,15 @@ async function run() {
             source: { contact_ids: [c3id] },
             list_ids: [createdListIds[0].id]
         });
-        logNotice(SEC, 'S6_BULK_SEGMENT', { status: segRes.status, body: segRes.body });
-        console.log(`  → activity status: ${segRes.status}, activity_id: ${segRes.body.activity_id || 'none'}`);
+        let segFinalState = 'UNKNOWN';
+        if (segRes.ok && segRes.body.activity_id) {
+            const { pollActivity } = require('./t1-large-dataset');
+            console.log(`  Polling bulk list segment activity ${segRes.body.activity_id}...`);
+            const pollS = await pollActivity(segRes.body.activity_id);
+            segFinalState = pollS.body ? pollS.body.state : 'UNKNOWN';
+        }
+        logNotice(SEC, 'S6_BULK_SEGMENT', { status: segRes.status, body: segRes.body, final_state: segFinalState });
+        console.log(`  → activity status: ${segRes.status}, final_state: ${segFinalState}`);
     }
 
     // ── S7 · List retrieval with membership count ─────────────────────
